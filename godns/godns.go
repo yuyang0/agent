@@ -1,23 +1,25 @@
-package dnsmasq
+package godns
 
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
+
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/libkv/store"
 	lainlet "github.com/laincloud/lainlet/client"
-	"github.com/laincloud/networkd/util"
-	"io/ioutil"
-	"os"
-	"strconv"
-	"strings"
-	"syscall"
+	"github.com/yuyang0/agent/util"
+	"github.com/yuyang0/agent/godns/server"
 )
 
-const DnsmaqdPidfile = "/var/run/dnsmasq.pid"
 const EtcdAddressPrefixKey = "dnsmasq_addresses"
 const EtcdServerPrefixKey = "dnsmasq_servers"
+const EtcdDomainPrefixKey = "domain"
 const EtcdPrefixKey = "/lain/config"
+
+var (
+	glog *logrus.Logger
+)
 
 type AddressItem struct {
 	ip     string
@@ -30,23 +32,21 @@ type ServerItem struct {
 	domain string
 }
 
-type Server struct {
-	ip             string
-	vip            string
-	libkv          store.Store
-	isRunning      bool
-	stopCh         chan struct{}
-	eventCh        chan int
-	cnfEvCh        chan int
-	addresses      []AddressItem
-	servers        []ServerItem
-	domains        []AddressItem
-	lainlet        *lainlet.Client
-	log            *logrus.Logger
-	extra          bool
-	hostFilename   string
-	serverFilename string
-	domainFilename string
+type Godns struct {
+	ip        string
+	vip       string
+	libkv     store.Store
+	srv       *server.Server
+	isRunning bool
+	stopCh    chan struct{}
+	eventCh   chan int
+	cnfEvCh   chan int
+	addresses []AddressItem
+	servers   []ServerItem
+	domains   []AddressItem
+	staticAddr map[string]string
+	lainlet   *lainlet.Client
+	extra     bool
 }
 
 type JSONAddressConfig struct {
@@ -58,26 +58,45 @@ type JSONServerConfig struct {
 	Servers []string `json:"servers"` // ip#port
 }
 
-func New(ip string, kv store.Store, lainlet *lainlet.Client, log *logrus.Logger,
-	host string, server string, domain string, extra bool) *Server {
-	return &Server{
-		ip:             ip,
-		log:            log,
-		libkv:          kv,
-		lainlet:        lainlet,
-		stopCh:         make(chan struct{}),
-		eventCh:        make(chan int),
-		cnfEvCh:        make(chan int),
-		isRunning:      false,
-		hostFilename:   host,
-		serverFilename: server,
-		domainFilename: domain,
-		extra:          extra,
+func New(dnsAddr string, ip string, kv store.Store, lainlet *lainlet.Client, log *logrus.Logger, extra bool) *Godns {
+	glog = log
+	srv := server.New(dnsAddr, log)
+	staticAddr := map[string] string {
+		"etcd.lain": ip,
+		"docker.lain": ip,
+		"lainlet.lain": ip,
+		"metric.lain": ip,
+	}
+	// add lain.local
+	key := fmt.Sprintf("%s/%s", EtcdPrefixKey, EtcdDomainPrefixKey)
+	if pair, err := kv.Get(key); err == nil {
+		domain := string(pair.Value[:])
+		if domain == "lain.local" {
+			key := fmt.Sprintf("%s/%s", EtcdPrefixKey, EtcdVipPrefixKey)
+			if pair, err := kv.Get(key); err == nil {
+				vip := string(pair.Value[:])
+				staticAddr[domain] = vip
+			}
+		}
+	}
+	return &Godns{
+		srv:       srv,
+		ip:        ip,
+		libkv:     kv,
+		lainlet:   lainlet,
+		stopCh:    make(chan struct{}),
+		eventCh:   make(chan int),
+		cnfEvCh:   make(chan int),
+		isRunning: false,
+		extra:     extra,
+		staticAddr: staticAddr,
 	}
 }
 
-func (self *Server) RunDnsmasqd() {
+func (self *Godns) Run() {
 	self.isRunning = true
+	go self.srv.Run()
+
 	stopAddressCh := make(chan struct{})
 	defer close(stopAddressCh)
 	stopServerCh := make(chan struct{})
@@ -86,23 +105,21 @@ func (self *Server) RunDnsmasqd() {
 	defer close(stopExtraCh)
 	stopVipCh := make(chan struct{})
 	defer close(stopVipCh)
-	go self.WatchDnsmasqAddress(stopAddressCh)
-	go self.WatchDnsmasqServer(stopServerCh)
+	go self.WatchGodnsAddress(stopAddressCh)
+	go self.WatchGodnsServer(stopServerCh)
 	if self.extra {
-		go self.WatchDnsmasqExtra(stopExtraCh)
+		go self.WatchGodnsExtra(stopExtraCh)
 		go self.WatchVip(stopVipCh)
 	}
 	for {
 		select {
 		case <-self.eventCh:
-			self.log.Debug("Received dnsmasq event")
+			glog.Debug("Received dnsmasq event")
 			self.SaveAddresses()
 			self.SaveServers()
-			self.ReloadDnsmasq()
 		case <-self.cnfEvCh:
-			self.log.Debug("Received dnsmasq configure event")
-			self.SaveExtras()
-			self.RestartDnsmasq()
+			glog.Debug("Received dnsmasq configure event")
+			self.SaveAddresses()
 		case <-self.stopCh:
 			self.isRunning = false
 			stopAddressCh <- struct{}{}
@@ -114,70 +131,20 @@ func (self *Server) RunDnsmasqd() {
 	}
 }
 
-func (self *Server) StopDnsmasqd() {
+func (self *Godns) Stop() {
+	self.srv.Stop()
 	if self.isRunning {
-		self.stopCh <- struct{}{}
+		close(self.stopCh)
 	}
 }
 
-func (self *Server) RestartDnsmasq() {
-	self.log.Info("systemctl restart dnsmasq")
-	_, err := util.ExecCommand("systemctl", "restart", "dnsmasq")
-	if err != nil {
-		self.log.WithFields(logrus.Fields{
-			"err": err,
-		}).Error("Cannot exec command")
-	}
-}
-
-// reconfig dnsmasq
-func (self *Server) ReloadDnsmasq() {
-	content, err := ioutil.ReadFile(DnsmaqdPidfile)
-	if err != nil {
-		self.log.WithFields(logrus.Fields{
-			"filename": DnsmaqdPidfile,
-			"err":      err,
-		}).Error("Cannot read dnsmasq pidfile")
-		return
-	}
-	pid, err := strconv.ParseInt(
-		strings.TrimRight(string(content), "\n"),
-		10,
-		64,
-	)
-	if err != nil {
-		self.log.WithFields(logrus.Fields{
-			"filename": DnsmaqdPidfile,
-			"content":  string(content),
-			"err":      err,
-		}).Error("Cannot parse dnsmasq pidfile")
-		return
-	}
-	process, err := os.FindProcess(int(pid))
-	if err != nil {
-		self.log.WithFields(logrus.Fields{
-			"pid": pid,
-			"err": err,
-		}).Error("Failed to find dnsmasq process")
-		return
-	}
-	err = process.Signal(syscall.SIGHUP) // dnsmasq will be reconfiged
-	if err != nil {
-		self.log.WithFields(logrus.Fields{
-			"pid": pid,
-			"err": err,
-		}).Error("Failed to reload dnsmasq process")
-		return
-	}
-}
-
-func (self *Server) WatchDnsmasqAddress(watchCh <-chan struct{}) {
+func (self *Godns) WatchGodnsAddress(watchCh <-chan struct{}) {
 	keyPrefixLength := len(EtcdAddressPrefixKey) + 1
-	util.WatchConfig(self.log, self.lainlet, EtcdAddressPrefixKey, watchCh, func(addrs interface{}) {
+	util.WatchConfig(glog, self.lainlet, EtcdAddressPrefixKey, watchCh, func(addrs interface{}) {
 		var addresses []AddressItem
 		for key, value := range addrs.(map[string]interface{}) {
 			domain := key[keyPrefixLength:]
-			self.log.WithFields(logrus.Fields{
+			glog.WithFields(logrus.Fields{
 				"domain": domain,
 				"value":  value.(string),
 			}).Debug("Get domain from lainlet")
@@ -185,14 +152,14 @@ func (self *Server) WatchDnsmasqAddress(watchCh <-chan struct{}) {
 			var addr JSONAddressConfig
 			err := json.Unmarshal([]byte(value.(string)), &addr)
 			if err != nil {
-				self.log.WithFields(logrus.Fields{
+				glog.WithFields(logrus.Fields{
 					"key":    fmt.Sprintf("%s/%s/%s", EtcdPrefixKey, EtcdAddressPrefixKey, key),
 					"reason": err,
 				}).Warn("Cannot parse domain config")
 				continue
 			}
 
-			self.log.WithFields(logrus.Fields{
+			glog.WithFields(logrus.Fields{
 				"domain":  domain,
 				"address": addr,
 			}).Debug("Get domain config from lainlet")
@@ -222,13 +189,13 @@ func (self *Server) WatchDnsmasqAddress(watchCh <-chan struct{}) {
 	})
 }
 
-func (self *Server) WatchDnsmasqServer(watchCh <-chan struct{}) {
+func (self *Godns) WatchGodnsServer(watchCh <-chan struct{}) {
 	keyPrefixLength := len(EtcdServerPrefixKey) + 1
-	util.WatchConfig(self.log, self.lainlet, EtcdServerPrefixKey, watchCh, func(addrs interface{}) {
+	util.WatchConfig(glog, self.lainlet, EtcdServerPrefixKey, watchCh, func(addrs interface{}) {
 		var servers []ServerItem
 		for key, value := range addrs.(map[string]interface{}) {
 			domain := key[keyPrefixLength:]
-			self.log.WithFields(logrus.Fields{
+			glog.WithFields(logrus.Fields{
 				"domain": domain,
 				"value":  value.(string),
 			}).Debug("Get domain from lainlet")
@@ -236,7 +203,7 @@ func (self *Server) WatchDnsmasqServer(watchCh <-chan struct{}) {
 			var serv JSONServerConfig
 			err := json.Unmarshal([]byte(value.(string)), &serv)
 			if err != nil {
-				self.log.WithFields(logrus.Fields{
+				glog.WithFields(logrus.Fields{
 					"key":    fmt.Sprintf("/lain/config/%s/%s", EtcdServerPrefixKey, key),
 					"reason": err,
 				}).Error("Cannot parse domain server config")
@@ -255,14 +222,14 @@ func (self *Server) WatchDnsmasqServer(watchCh <-chan struct{}) {
 					}
 					servers = append(servers, item)
 				} else {
-					self.log.WithFields(logrus.Fields{
+					glog.WithFields(logrus.Fields{
 						"domain": domain,
 						"server": serverKey,
 					}).Error("Invalid domain server config")
 					continue
 				}
 			}
-			self.log.WithFields(logrus.Fields{
+			glog.WithFields(logrus.Fields{
 				"domain": domain,
 				"server": serv,
 			}).Debug("Get domain config from lainlet")
@@ -272,34 +239,31 @@ func (self *Server) WatchDnsmasqServer(watchCh <-chan struct{}) {
 	})
 }
 
-func (self *Server) SaveAddresses() {
-	data := []byte{}
-	for _, addr := range self.addresses {
-		content := fmt.Sprintf("%s %s\n", addr.ip, addr.domain)
-		data = append(data, content...)
+func (self *Godns) SaveAddresses() {
+	data := make(map[string]string)
+	for domain, ip := range self.staticAddr {
+		data[domain] = ip
 	}
-	ioutil.WriteFile(self.hostFilename, data, 0644)
+	for _, addr := range self.addresses {
+		data[addr.domain] = addr.ip
+	}
+
+	for _, serv := range self.domains {
+		data[serv.domain] = serv.ip
+	}
+	self.srv.ReplaceAddresses(data)
 }
 
-func (self *Server) SaveServers() {
+func (self *Godns) SaveServers() {
 	data := []byte{}
 	for _, serv := range self.servers {
 		content := fmt.Sprintf("server=/%s/%s#%s\n", serv.domain, serv.ip, serv.port)
 		data = append(data, content...)
 	}
-	ioutil.WriteFile(self.serverFilename, data, 0644)
+	self.srv.ReplaceDomainServers(data)
 }
 
-func (self *Server) SaveExtras() {
-	data := []byte{}
-	for _, serv := range self.domains {
-		content := fmt.Sprintf("address=/%s/%s\n", serv.domain, serv.ip)
-		data = append(data, content...)
-	}
-	ioutil.WriteFile(self.domainFilename, data, 0644)
-}
-
-func (self *Server) AddAddress(addressDomain string, addressIps []string, addressType string) {
+func (self *Godns) AddAddress(addressDomain string, addressIps []string, addressType string) {
 	kv := self.libkv
 	key := fmt.Sprintf("%s/%s/%s", EtcdPrefixKey, EtcdAddressPrefixKey, addressDomain)
 	data := JSONAddressConfig{
@@ -308,7 +272,7 @@ func (self *Server) AddAddress(addressDomain string, addressIps []string, addres
 	}
 	value, err := json.Marshal(data)
 	if err != nil {
-		self.log.WithFields(logrus.Fields{
+		glog.WithFields(logrus.Fields{
 			"key":  key,
 			"data": data,
 			"err":  err,
@@ -318,7 +282,7 @@ func (self *Server) AddAddress(addressDomain string, addressIps []string, addres
 	// TODO(xutao) retry
 	err = kv.Put(key, value, nil)
 	if err != nil {
-		self.log.WithFields(logrus.Fields{
+		glog.WithFields(logrus.Fields{
 			"key":   key,
 			"value": data,
 			"err":   err,
@@ -328,7 +292,7 @@ func (self *Server) AddAddress(addressDomain string, addressIps []string, addres
 }
 
 // servers: [1.1.1.1#53, 2.2.2.2#53]
-func (self *Server) AddServer(domain string, servers []string) {
+func (self *Godns) AddServer(domain string, servers []string) {
 	kv := self.libkv
 	key := fmt.Sprintf("%s/%s/%s", EtcdPrefixKey, EtcdServerPrefixKey, domain)
 	data := JSONServerConfig{
@@ -336,7 +300,7 @@ func (self *Server) AddServer(domain string, servers []string) {
 	}
 	value, err := json.Marshal(data)
 	if err != nil {
-		self.log.WithFields(logrus.Fields{
+		glog.WithFields(logrus.Fields{
 			"key":  key,
 			"data": data,
 			"err":  err,
@@ -346,7 +310,7 @@ func (self *Server) AddServer(domain string, servers []string) {
 	// TODO(xutao) retry
 	err = kv.Put(key, value, nil)
 	if err != nil {
-		self.log.WithFields(logrus.Fields{
+		glog.WithFields(logrus.Fields{
 			"key":   key,
 			"value": data,
 			"err":   err,

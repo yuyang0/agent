@@ -3,8 +3,9 @@ package acl
 import (
 	"encoding/json"
 	"fmt"
+
 	"github.com/Sirupsen/logrus"
-	"github.com/laincloud/networkd/util"
+	"github.com/yuyang0/agent/util"
 )
 
 const EtcdWhiteListIpsKeyPrefix = "whitelist_ips"

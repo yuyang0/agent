@@ -1,6 +1,6 @@
 Networkd
 ========
-[![codecov](https://codecov.io/gh/laincloud/networkd/branch/master/graph/badge.svg)](https://codecov.io/gh/laincloud/networkd)
+[![codecov](https://codecov.io/gh/yuyang0/agent/branch/master/graph/badge.svg)](https://codecov.io/gh/yuyang0/agent)
 
 layer 0 network daemon.
 

@@ -5,7 +5,7 @@ import (
 	"sync"
 
 	"github.com/Sirupsen/logrus"
-	"github.com/laincloud/networkd/hashmap"
+	"github.com/yuyang0/agent/hashmap"
 )
 
 const (

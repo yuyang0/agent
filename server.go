@@ -20,11 +20,11 @@ import (
 	kvetcd "github.com/docker/libkv/store/etcd"
 	"github.com/fsouza/go-dockerclient"
 	lainlet "github.com/laincloud/lainlet/client"
-	"github.com/laincloud/networkd/acl"
-	"github.com/laincloud/networkd/dnsmasq"
 	"github.com/projectcalico/libcalico-go/lib/api"
 	calicoetcd "github.com/projectcalico/libcalico-go/lib/backend/etcd"
 	calico "github.com/projectcalico/libcalico-go/lib/client"
+	"github.com/yuyang0/agent/acl"
+	"github.com/yuyang0/agent/godns"
 )
 
 const (
@@ -73,12 +73,9 @@ type Server struct {
 	// health
 	healthStopCh    chan struct{}
 	healthIsRunning bool
-	// dnsmasq
-	dnsmasq       *dnsmasq.Server
-	dnsmasqFlag   bool
-	dnsmasqHost   string
-	dnsmasqServer string
-	dnsmasqDomain string
+	// godns
+	godns  *godns.Godns
+	addr   string
 	//Acl
 	acl     *acl.Acl
 	aclFlag bool
@@ -143,8 +140,7 @@ func init() {
 	kvetcd.Register()
 }
 
-func (self *Server) InitFlag(dnsmasq bool, tinydns bool, swarm bool, webrouter bool, deployd bool, acl bool, resolvConf bool, streamrouter bool) {
-	self.dnsmasqFlag = dnsmasq
+func (self *Server) InitFlag(tinydns bool, swarm bool, webrouter bool, deployd bool, acl bool, resolvConf bool, streamrouter bool) {
 	self.tinydnsFlag = tinydns
 	self.swarmFlag = swarm
 	self.webrouterFlag = webrouter
@@ -299,12 +295,9 @@ func (self *Server) InitAddress(ip string) {
 	log.Info(fmt.Sprintf("HostIP %s", self.ip))
 }
 
-func (self *Server) InitDnsmasq(host string, server string, domain string, extra bool) {
+func (self *Server) InitGodns(addr string, extra bool) {
 	// TODO(xutao) check host & server
-	self.dnsmasqHost = host
-	self.dnsmasqServer = server
-	self.dnsmasqDomain = domain
-	self.dnsmasq = dnsmasq.New(self.ip, self.libkv, self.lainlet, log, host, server, domain, extra)
+	self.godns = godns.New(addr, self.ip, self.libkv, self.lainlet, log, extra)
 	self.tinydnsStopCh = make(chan struct{})
 	self.tinydnsIsRunning = false
 	self.swarmStopCh = make(chan struct{})
@@ -765,7 +758,7 @@ func (self *Server) ApplyDeploydIps() {
 	splitKey := strings.SplitN(value, ":", 2)
 	ip, _ := splitKey[0], splitKey[1]
 	ips := []string{ip}
-	self.dnsmasq.AddAddress("deployd.lain", ips, "")
+	self.godns.AddAddress("deployd.lain", ips, "")
 }
 
 func (self *Server) WatchSwarmIps(stopWatchCh <-chan struct{}) <-chan int {
@@ -794,7 +787,7 @@ func (self *Server) ApplySwarmIps() {
 	splitKey := strings.SplitN(value, ":", 2)
 	ip, _ := splitKey[0], splitKey[1]
 	ips := []string{ip}
-	self.dnsmasq.AddAddress("swarm.lain", ips, "")
+	self.godns.AddAddress("swarm.lain", ips, "")
 }
 
 func (self *Server) RunHealth() {
@@ -1035,23 +1028,19 @@ func (self *Server) WatchElect(stopWatchCh <-chan struct{}) {
 					if self.streamrouterFlag {
 						self.RunStreamrouter()
 					}
-					if self.dnsmasqFlag {
 						if self.swarmFlag {
 							self.RunSwarm()
 						}
 						if self.tinydnsFlag {
 							self.RunTinydns()
 						}
-					}
 				} else {
-					if self.dnsmasqFlag {
 						if self.tinydnsFlag {
 							self.StopTinydns()
 						}
 						if self.swarmFlag {
 							self.StopSwarm()
 						}
-					}
 					if self.webrouterFlag {
 						self.StopWebrouter()
 					}
@@ -1347,14 +1336,14 @@ func (self *Server) RemoveVirtualIpLock(lockedIp LockedIp) (state int, err error
 	return LockerStateDeleted, nil
 }
 
-func (self *Server) RunDnsmasq() {
-	log.Info("Run dnsmasq")
-	go self.dnsmasq.RunDnsmasqd()
+func (self *Server) RunGodns() {
+	log.Info("Run Godns")
+	go self.godns.Run()
 }
 
-func (self *Server) StopDnsmasq() {
-	log.Debug("Stop dnsmasq")
-	self.dnsmasq.StopDnsmasqd()
+func (self *Server) StopGodns() {
+	log.Info("Stop Godns")
+	self.godns.Stop()
 }
 
 func (self *Server) RunAcl() {
@@ -1517,10 +1506,8 @@ func (self *Server) Run() {
 	self.electIsRunning = false
 	self.InitEventChan()
 	self.RunElect()
-	if self.dnsmasqFlag {
-		self.RunDnsmasq()
-	}
-	if self.aclFlag {
+	self.RunGodns()
+    if self.aclFlag {
 		self.RunAcl()
 	}
 	self.RunLainlet()
@@ -1540,9 +1527,6 @@ func (self *Server) Stop() {
 	if self.tinydnsFlag {
 		self.StopTinydns()
 	}
-	if self.dnsmasqFlag {
-		self.StopDnsmasq()
-	}
 	if self.aclFlag {
 		self.StopAcl()
 	}
@@ -1559,6 +1543,7 @@ func (self *Server) Stop() {
 		self.StopResolvConf()
 	}
 
+	self.StopGodns()
 	self.StopHealth()
 	self.StopElect()
 	self.StopLainlet()

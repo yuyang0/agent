@@ -35,12 +35,9 @@ func main() {
 		webrouter       = flag.Bool("webrouter", false, "Enable/Disable watch webrouter ip.")
 		streamrouter    = flag.Bool("streamrouter", false, "Enable/Disable watch streamrouter vips and ports.")
 		deployd         = flag.Bool("deployd", false, "Enable/Disable watch deployd ip.")
-		dnsmasq         = flag.Bool("dnsmasq", false, "Enable/Disable dnsmasq.")
 		extra           = flag.Bool("extra", false, "Enable/Disable extrad domain monitor.")
 		acl             = flag.Bool("acl", false, "Enable/Disable acl.")
-		dnsmasqHost     = flag.String("dnsmasq.host", "/etc/dnsmasq.hosts", "Dnsmasq host filename")
-		dnsmasqServer   = flag.String("dnsmasq.server", "/etc/dnsmasq.servers", "Dnsmasq server filename")
-		dnsmasqDomain   = flag.String("dnsmasq.domain", "/etc/dnsmasq.d/extra_domain.conf", "Dnsmasq extra domain filename")
+		dnsAddr         = flag.String("godns.addr", "127.0.0.1:53", "godnds' listen address")
 		printVersion    = flag.Bool("version", false, "Print the version and exit.")
 		verbose         = flag.Bool("verbose", false, "Print more info.")
 	)
@@ -83,7 +80,7 @@ func main() {
 	defer lock.Unlock()
 
 	var server Server
-	server.InitFlag(*dnsmasq, *tinydns, *swarm, *webrouter, *deployd, *acl, *resolvConf, *streamrouter)
+	server.InitFlag(*tinydns, *swarm, *webrouter, *deployd, *acl, *resolvConf, *streamrouter)
 	server.InitIptables()
 	server.InitLibNetwork(*libnetwork)
 	server.InitDocker(*dockerEndpoint)
@@ -100,9 +97,7 @@ func main() {
 	server.InitResolvConf()
 	server.InitDomain(*domain)
 
-	if *dnsmasq {
-		server.InitDnsmasq(*dnsmasqHost, *dnsmasqServer, *dnsmasqDomain, *extra)
-	}
+	server.InitGodns(*dnsAddr, *extra)
 
 	if *acl {
 		server.InitAcl()

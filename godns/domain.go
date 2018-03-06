@@ -1,4 +1,4 @@
-package dnsmasq
+package godns
 
 import (
 	"encoding/json"
@@ -6,25 +6,25 @@ import (
 	"reflect"
 
 	"github.com/Sirupsen/logrus"
-	"github.com/laincloud/networkd/util"
+	"github.com/yuyang0/agent/util"
 )
 
 const EtcdDnsExtraPrefixKey = "extra_domains"
 const EtcdVipPrefixKey = "vip"
 
-func (self *Server) WatchDnsmasqExtra(watchCh <-chan struct{}) {
-	util.WatchConfig(self.log, self.lainlet, EtcdDnsExtraPrefixKey, watchCh, func(datas interface{}) {
+func (self *Godns) WatchGodnsExtra(watchCh <-chan struct{}) {
+	util.WatchConfig(glog, self.lainlet, EtcdDnsExtraPrefixKey, watchCh, func(datas interface{}) {
 		var domainAddrs []AddressItem
 		ip := self.FetchVip()
 		for key, value := range datas.(map[string]interface{}) {
-			self.log.WithFields(logrus.Fields{
+			glog.WithFields(logrus.Fields{
 				"key":     key,
 				"domains": value,
 			}).Debug("Get domain from lainlet")
 			var domains []string
 			err := json.Unmarshal([]byte(value.(string)), &domains)
 			if err != nil {
-				self.log.WithFields(logrus.Fields{
+				glog.WithFields(logrus.Fields{
 					"key":    fmt.Sprintf("/lain/config/%s/%s", EtcdDnsExtraPrefixKey, key),
 					"reason": err,
 				}).Error("Cannot parse domain server config")
@@ -45,14 +45,14 @@ func (self *Server) WatchDnsmasqExtra(watchCh <-chan struct{}) {
 	})
 }
 
-func (self *Server) WatchVip(watchCh <-chan struct{}) {
-	util.WatchConfig(self.log, self.lainlet, EtcdVipPrefixKey, watchCh, func(datas interface{}) {
+func (self *Godns) WatchVip(watchCh <-chan struct{}) {
+	util.WatchConfig(glog, self.lainlet, EtcdVipPrefixKey, watchCh, func(datas interface{}) {
 		lastIp := self.FetchVip()
 		if len(datas.(map[string]interface{})) == 0 {
 			self.vip = ""
 		} else {
 			for key, value := range datas.(map[string]interface{}) {
-				self.log.WithFields(logrus.Fields{
+				glog.WithFields(logrus.Fields{
 					"key": key,
 					"vip": value,
 				}).Debug("Get vip from lainlet")
@@ -70,7 +70,7 @@ func (self *Server) WatchVip(watchCh <-chan struct{}) {
 	})
 }
 
-func (self *Server) FetchVip() string {
+func (self *Godns) FetchVip() string {
 	ip := self.vip
 	if ip == "" || self.vip == "0.0.0.0" {
 		ip = self.ip

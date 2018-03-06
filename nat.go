@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/laincloud/networkd/acl"
-	"github.com/laincloud/networkd/util"
+	"github.com/yuyang0/agent/acl"
+	"github.com/yuyang0/agent/util"
 )
 
 // TODO(xutao) support more interfaces
