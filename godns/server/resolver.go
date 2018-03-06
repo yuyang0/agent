@@ -30,7 +30,13 @@ type RResp struct {
 
 type Resolver struct {
 	mu            sync.RWMutex
+	// the total upstream server list, contain 2 parts
+	// 1. server list in resolv.conf
+	// 2. server list from other place eg: server file
 	servers       []string
+	// server list in resolv.conf
+	resolvServers []string
+	// upstream server for specified domain
 	domainServers *suffixTreeNode
 }
 
@@ -48,14 +54,14 @@ func NewResolver() *Resolver {
 	}
 	for _, server := range clientConfig.Servers {
 		nameserver := net.JoinHostPort(server, clientConfig.Port)
-		r.servers = append(r.servers, nameserver)
+		r.resolvServers = append(r.resolvServers, nameserver)
 	}
 
 	return r
 }
 
 func (r *Resolver) ParseServerList(buf []byte) {
-	servers := []string{}
+	var servers []string
 	domainServers := newSuffixTreeRoot()
 	scanner := bufio.NewScanner(bytes.NewReader(buf))
 	for scanner.Scan() {
@@ -101,6 +107,7 @@ func (r *Resolver) ParseServerList(buf []byte) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	servers = append(servers, r.resolvServers...)
 	r.servers = servers
 	r.domainServers = domainServers
 }
@@ -185,7 +192,7 @@ func (r *Resolver) nameservers(qname string) []string {
 	queryKeys := strings.Split(qname, ".")
 	queryKeys = queryKeys[:len(queryKeys)-1] // ignore last '.'
 
-	ns := []string{}
+	var ns []string
 	if v, found := r.domainServers.search(queryKeys); found {
 		glog.Debugf("%s be found in domain server list, upstream: %v", qname, v)
 		ns = append(ns, v...)
