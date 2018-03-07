@@ -41,7 +41,7 @@ type Resolver struct {
 	domainServers *suffixTreeNode
 }
 
-func NewResolver() *Resolver {
+func NewResolver(mainAddr string) *Resolver {
 	r := &Resolver{
 		resolvServers: mapset.NewSet(),
 		servers:       mapset.NewSet(),
@@ -55,9 +55,13 @@ func NewResolver() *Resolver {
 		panic(err)
 	}
 	for _, server := range clientConfig.Servers {
-		nameserver := net.JoinHostPort(server, clientConfig.Port)
-		r.resolvServers.Add(nameserver)
-		r.servers.Add(nameserver)
+		nameServer := net.JoinHostPort(server, clientConfig.Port)
+		// ignore the address this server listen on
+		if nameServer == mainAddr {
+			continue
+		}
+		r.resolvServers.Add(nameServer)
+		r.servers.Add(nameServer)
 	}
 	return r
 }
@@ -85,7 +89,7 @@ func (r *Resolver) DumpConfig() []byte {
 
 	var data []byte
 
-	literal := "\n\n# servers\n"
+	literal := "\n# servers\n"
 	data = append(data, literal...)
 
 	r.domainServers.iterFunc(nil, func(keys []string, v mapset.Set) {
@@ -208,7 +212,7 @@ func (r *Resolver) Lookup(net string, req *dns.Msg) (message *dns.Msg, err error
 	defer ticker.Stop()
 	// Start lookup on each nameserver top-down, in every second
 	nameservers := r.nameservers(qname)
-	glog.Infof("qname: %s, nameservers: %v, resolv: %v", qname, nameservers, r.resolvServers)
+	glog.Debugf("qname: %s, nameservers: %v, resolv: %v", qname, nameservers, r.resolvServers)
 	for _, nameserver := range nameservers {
 		wg.Add(1)
 		go L(nameserver)

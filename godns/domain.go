@@ -18,8 +18,8 @@ func (self *Godns) WatchGodnsExtra(watchCh <-chan struct{}) {
 		ip := self.FetchVip()
 		for key, value := range datas.(map[string]interface{}) {
 			glog.WithFields(logrus.Fields{
-				"key":     key,
-				"domains": value,
+				"key":    key,
+				"domain": value,
 			}).Debug("Get domain from lainlet")
 			var domains []string
 			err := json.Unmarshal([]byte(value.(string)), &domains)
@@ -37,11 +37,11 @@ func (self *Godns) WatchGodnsExtra(watchCh <-chan struct{}) {
 				})
 			}
 		}
-		if reflect.DeepEqual(self.domains, domainAddrs) {
+		if reflect.DeepEqual(self.addresses, domainAddrs) {
 			return
 		}
-		self.domains = domainAddrs
-		self.cnfEvCh <- 1
+		self.addresses = domainAddrs
+		self.eventCh <- 1
 	})
 }
 
@@ -63,10 +63,10 @@ func (self *Godns) WatchVip(watchCh <-chan struct{}) {
 		if lastIp == ip {
 			return
 		}
-		for i, _ := range self.domains {
-			self.domains[i].ip = ip
+		for i, _ := range self.addresses {
+			self.addresses[i].ip = ip
 		}
-		self.cnfEvCh <- 1
+		self.eventCh <- 1
 	})
 }
 

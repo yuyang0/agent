@@ -65,7 +65,7 @@ func New(addr string, log *logrus.Logger) *Server {
 	)
 	glog = log
 
-	resolver = NewResolver()
+	resolver = NewResolver(addr)
 
 	cache = &MemoryCache{
 		Backend:  make(map[string]Mesg, CACHE_MAXCOUNT),
@@ -134,17 +134,17 @@ func (srv *Server) Stop() {
 }
 
 func (self *Server) ReplaceHosts(data map[string]string) {
-	glog.Debugf("replace hosts %v", data)
+	glog.Infof("replace hosts %v", data)
 	self.ldata.ReplaceHosts(data)
 }
 
 func (self *Server) ReplaceAddresses(data map[string] []string) {
-	glog.Debugf("replace Address %v", data)
+	glog.Infof("replace Address %v", data)
 	self.ldata.ReplaceWildcardHosts(data)
 }
 
 func (self *Server) ReplaceDomainServers(data map[string][]string) {
-	glog.Debugf("replace domain servers %v", data)
+	glog.Infof("replace domain servers %v", data)
 	self.resolver.ReplaceDomainServers(data)
 }
 

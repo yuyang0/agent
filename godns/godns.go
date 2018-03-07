@@ -33,20 +33,23 @@ type ServerItem struct {
 }
 
 type Godns struct {
-	ip        string
-	vip       string
-	libkv     store.Store
-	srv       *server.Server
-	isRunning bool
-	stopCh    chan struct{}
-	eventCh   chan int
-	cnfEvCh   chan int
-	addresses []AddressItem
-	servers   []ServerItem
-	domains   []AddressItem
-	staticAddr map[string]string
-	lainlet   *lainlet.Client
-	extra     bool
+	ip            string
+	vip           string
+	libkv         store.Store
+	srv           *server.Server
+	isRunning     bool
+	stopCh        chan struct{}
+	eventCh       chan int
+
+	hosts         []AddressItem
+	domainServers []ServerItem
+	addresses     []AddressItem
+
+	staticAddr    map[string]string
+	staticHosts   map[string]string
+
+	lainlet       *lainlet.Client
+	extra         bool
 }
 
 type JSONAddressConfig struct {
@@ -61,12 +64,13 @@ type JSONServerConfig struct {
 func New(dnsAddr string, ip string, kv store.Store, lainlet *lainlet.Client, log *logrus.Logger, extra bool) *Godns {
 	glog = log
 	srv := server.New(dnsAddr, log)
-	staticAddr := map[string] string {
+	staticHosts := map[string] string {
 		"etcd.lain": ip,
 		"docker.lain": ip,
 		"lainlet.lain": ip,
 		"metric.lain": ip,
 	}
+	staticAddr := make(map[string]string)
 	// add lain.local
 	key := fmt.Sprintf("%s/%s", EtcdPrefixKey, EtcdDomainPrefixKey)
 	if pair, err := kv.Get(key); err == nil {
@@ -86,10 +90,10 @@ func New(dnsAddr string, ip string, kv store.Store, lainlet *lainlet.Client, log
 		lainlet:   lainlet,
 		stopCh:    make(chan struct{}),
 		eventCh:   make(chan int),
-		cnfEvCh:   make(chan int),
 		isRunning: false,
 		extra:     extra,
 		staticAddr: staticAddr,
+		staticHosts:staticHosts,
 	}
 }
 
@@ -97,35 +101,21 @@ func (self *Godns) Run() {
 	self.isRunning = true
 	go self.srv.Run()
 
-	stopAddressCh := make(chan struct{})
-	defer close(stopAddressCh)
-	stopServerCh := make(chan struct{})
-	defer close(stopServerCh)
-	stopExtraCh := make(chan struct{})
-	defer close(stopExtraCh)
-	stopVipCh := make(chan struct{})
-	defer close(stopVipCh)
-	go self.WatchGodnsAddress(stopAddressCh)
-	go self.WatchGodnsServer(stopServerCh)
+	go self.WatchGodnsHosts(self.stopCh)
+	go self.WatchGodnsServer(self.stopCh)
 	if self.extra {
-		go self.WatchGodnsExtra(stopExtraCh)
-		go self.WatchVip(stopVipCh)
+		go self.WatchGodnsExtra(self.stopCh)
+		go self.WatchVip(self.stopCh)
 	}
 	for {
 		select {
 		case <-self.eventCh:
 			glog.Debug("Received dns event")
 			self.SaveHosts()
-			self.SaveServers()
-		case <-self.cnfEvCh:
-			glog.Debug("Received dns configure event")
+			self.SaveDomainServers()
 			self.SaveAddresses()
 		case <-self.stopCh:
 			self.isRunning = false
-			stopAddressCh <- struct{}{}
-			stopServerCh <- struct{}{}
-			stopExtraCh <- struct{}{}
-			stopVipCh <- struct{}{}
 			return
 		}
 	}
@@ -142,10 +132,10 @@ func (self *Godns) DumpConfig() string {
 	return self.srv.DumpAllConfig()
 }
 
-func (self *Godns) WatchGodnsAddress(watchCh <-chan struct{}) {
+func (self *Godns) WatchGodnsHosts(watchCh <-chan struct{}) {
 	keyPrefixLength := len(EtcdGodnsHostsPrefixKey) + 1
 	util.WatchConfig(glog, self.lainlet, EtcdGodnsHostsPrefixKey, watchCh, func(addrs interface{}) {
-		var addresses []AddressItem
+		var hosts []AddressItem
 		for key, value := range addrs.(map[string]interface{}) {
 			domain := key[keyPrefixLength:]
 			glog.WithFields(logrus.Fields{
@@ -175,7 +165,7 @@ func (self *Godns) WatchGodnsAddress(watchCh <-chan struct{}) {
 					ip:     ip,
 					domain: domain,
 				}
-				addresses = append(addresses, item)
+				hosts = append(hosts, item)
 			} else {
 				// TODO(xutao) validate ip
 				for _, ip := range addr.Ips {
@@ -183,11 +173,11 @@ func (self *Godns) WatchGodnsAddress(watchCh <-chan struct{}) {
 						ip:     ip,
 						domain: domain,
 					}
-					addresses = append(addresses, item)
+					hosts = append(hosts, item)
 				}
 			}
 
-			self.addresses = addresses
+			self.hosts = hosts
 		}
 		self.eventCh <- 1
 	})
@@ -238,14 +228,17 @@ func (self *Godns) WatchGodnsServer(watchCh <-chan struct{}) {
 				"server": serv,
 			}).Debug("Get domain config from lainlet")
 		}
-		self.servers = servers
+		self.domainServers = servers
 		self.eventCh <- 1
 	})
 }
 
 func (self *Godns) SaveHosts() {
 	data := make(map[string]string)
-	for _, addr := range self.addresses {
+	for domain, ip := range self.staticHosts {
+		data[domain] = ip
+	}
+	for _, addr := range self.hosts {
 		data[addr.domain] = addr.ip
 	}
 	self.srv.ReplaceHosts(data)
@@ -261,7 +254,7 @@ func (self *Godns) SaveAddresses() {
 		v = append(v, ip)
 		data[domain] = v
 	}
-	for _, serv := range self.domains {
+	for _, serv := range self.addresses {
 		var v []string
 		if old, ok := data[serv.domain]; ok {
 			v = old
@@ -272,9 +265,9 @@ func (self *Godns) SaveAddresses() {
 	self.srv.ReplaceAddresses(data)
 }
 
-func (self *Godns) SaveServers() {
+func (self *Godns) SaveDomainServers() {
 	data := make(map[string][]string)
-	for _, serv := range self.servers {
+	for _, serv := range self.domainServers {
 		var v []string
 		if old, ok := data[serv.domain]; ok {
 			v = old
@@ -314,8 +307,8 @@ func (self *Godns) AddHost(addressDomain string, addressIps []string, addressTyp
 	}
 }
 
-// servers: [1.1.1.1#53, 2.2.2.2#53]
-func (self *Godns) AddServer(domain string, servers []string) {
+// domainServers: [1.1.1.1#53, 2.2.2.2#53]
+func (self *Godns) AddDomainServer(domain string, servers []string) {
 	kv := self.libkv
 	key := fmt.Sprintf("%s/%s/%s", EtcdPrefixKey, EtcdGodnsServerPrefixKey, domain)
 	data := JSONServerConfig{

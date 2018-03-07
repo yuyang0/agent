@@ -37,7 +37,7 @@ func (d *LocalData) DumpConfig() []byte {
 		content := fmt.Sprintf("%s %s\n", ip, domain)
 		data = append(data, content...)
 	}
-	literal = "\n\n# addresses\n"
+	literal = "\n# addresses\n"
 	data = append(data, literal...)
 	d.wildcardHosts.iterFunc(nil, func(keys []string, v mapset.Set) {
 		domain := strings.Join(keys, ".")

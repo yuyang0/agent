@@ -72,9 +72,9 @@ func (self *Agent) ApplyTinydnsIps() {
 		ip, port := splitKey[0], splitKey[1]
 		servers = append(servers, fmt.Sprintf("%s#%s", ip, port))
 	}
-	self.godns.AddServer("lain", servers)
+	self.godns.AddDomainServer("lain", servers)
 	if self.domain != "" {
-		self.godns.AddServer(self.domain, servers)
+		self.godns.AddDomainServer(self.domain, servers)
 	}
 }
 
