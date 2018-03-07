@@ -38,6 +38,7 @@ func main() {
 		extra           = flag.Bool("extra", false, "Enable/Disable extrad domain monitor.")
 		acl             = flag.Bool("acl", false, "Enable/Disable acl.")
 		dnsAddr         = flag.String("godns.addr", "127.0.0.1:53", "godnds' listen address")
+		apiAddr          = flag.String("api.addr", "127.0.0.1:3000", "api server's listen address")
 		printVersion    = flag.Bool("version", false, "Print the version and exit.")
 		verbose         = flag.Bool("verbose", false, "Print more info.")
 	)
@@ -79,33 +80,34 @@ func main() {
 
 	defer lock.Unlock()
 
-	var server Server
-	server.InitFlag(*tinydns, *swarm, *webrouter, *deployd, *acl, *resolvConf, *streamrouter)
-	server.InitIptables()
-	server.InitLibNetwork(*libnetwork)
-	server.InitDocker(*dockerEndpoint)
-	server.InitEtcd(*etcdEndpoint)
-	server.InitCalico(*etcdEndpoint)
-	server.InitInterface(*netInterface)
-	server.InitHostname(*hostname)
-	server.InitAddress(*netAddress)
-	server.InitLibkv(*etcdEndpoint)
-	server.InitLainlet(*lainletEndPoint)
-	server.InitWebrouter()
-	server.InitStreamrouter()
-	server.InitDeployd()
-	server.InitResolvConf()
-	server.InitDomain(*domain)
+	var agt Agent
+	agt.InitFlag(*tinydns, *swarm, *webrouter, *deployd, *acl, *resolvConf, *streamrouter)
+	agt.InitIptables()
+	agt.InitLibNetwork(*libnetwork)
+	agt.InitDocker(*dockerEndpoint)
+	agt.InitEtcd(*etcdEndpoint)
+	agt.InitCalico(*etcdEndpoint)
+	agt.InitInterface(*netInterface)
+	agt.InitHostname(*hostname)
+	agt.InitAddress(*netAddress)
+	agt.InitLibkv(*etcdEndpoint)
+	agt.InitLainlet(*lainletEndPoint)
+	agt.InitWebrouter()
+	agt.InitStreamrouter()
+	agt.InitDeployd()
+	agt.InitResolvConf()
+	agt.InitDomain(*domain)
 
-	server.InitGodns(*dnsAddr, *extra)
+	agt.InitGodns(*dnsAddr, *extra)
+	agt.InitApiServer(*apiAddr)
 
 	if *acl {
-		server.InitAcl()
+		agt.InitAcl()
 	}
 
 	if *resolvConf {
-		server.RunResolvConf()
+		agt.RunResolvConf()
 	}
 
-	server.Run()
+	agt.Run()
 }

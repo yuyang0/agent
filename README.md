@@ -1,4 +1,4 @@
-Networkd
+Agent
 ========
 [![codecov](https://codecov.io/gh/yuyang0/agent/branch/master/graph/badge.svg)](https://codecov.io/gh/yuyang0/agent)
 
@@ -80,24 +80,22 @@ vip: 192.168.10.254
         }
         ```
 
-## Dnsmasq
-
-1. configuration for dnsmasq hosts & servers
-1. dnsmasq version >= 2.69
+## Dns
+Agent contains a embedded dns server similar to dnsmasq
 
 ## Tinydns
 
-dynamic dnsmasq server conf of tinydns app
+dynamic dns server conf of tinydns app
 
 ## Swarm
 
-1. dynamic dnsmasq host conf of swarm manager
+1. dynamic dns host conf of swarm manager
     1. `swarm.lain`
 2. `/lain/swarm/docker/swarm/leader`
 
 ## Deployd
 
-1. dynamic dnsmasq host conf of deployd
+1. dynamic dns host conf of deployd
     1. `deployd.lain`
 1. `/lain/deployd/leader`
 

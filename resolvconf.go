@@ -18,7 +18,7 @@ const ResolvConfFilename = "/etc/resolv.conf"
 
 var lastHash string
 
-func (self *Server) InitResolvConf() {
+func (self *Agent) InitResolvConf() {
 	self.resolvConfIsRunning = false
 	self.resolvConfStopCh = make(chan struct{})
 	if self.resolvConfFlag {
@@ -188,7 +188,7 @@ func HashData(src io.Reader) (string, error) {
 	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func (self *Server) RunResolvConf() {
+func (self *Agent) RunResolvConf() {
 	if self.resolvConfIsRunning {
 		return
 	}
@@ -210,7 +210,7 @@ func (self *Server) RunResolvConf() {
 	}()
 }
 
-func (self *Server) StopResolvConf() {
+func (self *Agent) StopResolvConf() {
 	if self.resolvConfIsRunning {
 		log.Info("Stop resolvconf")
 		self.resolvConfIsRunning = false

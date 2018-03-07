@@ -25,6 +25,7 @@ import (
 	calico "github.com/projectcalico/libcalico-go/lib/client"
 	"github.com/yuyang0/agent/acl"
 	"github.com/yuyang0/agent/godns"
+	"github.com/yuyang0/agent/apiserver"
 )
 
 const (
@@ -45,7 +46,7 @@ type LockedIp struct {
 	modifiedIndex uint64
 }
 
-type Server struct {
+type Agent struct {
 	ip            string
 	iface         string
 	hostname      string
@@ -99,6 +100,8 @@ type Server struct {
 	streamrouterFlag      bool
 	streamrouterStopCh    chan struct{}
 	streamrouterIsRunning bool
+	// api server
+	api *apiserver.Server
 }
 
 type JSONVirtualIpPortConfig struct {
@@ -140,7 +143,7 @@ func init() {
 	kvetcd.Register()
 }
 
-func (self *Server) InitFlag(tinydns bool, swarm bool, webrouter bool, deployd bool, acl bool, resolvConf bool, streamrouter bool) {
+func (self *Agent) InitFlag(tinydns bool, swarm bool, webrouter bool, deployd bool, acl bool, resolvConf bool, streamrouter bool) {
 	self.tinydnsFlag = tinydns
 	self.swarmFlag = swarm
 	self.webrouterFlag = webrouter
@@ -150,7 +153,7 @@ func (self *Server) InitFlag(tinydns bool, swarm bool, webrouter bool, deployd b
 	self.resolvConfFlag = resolvConf
 }
 
-func (self *Server) InitDocker(endpoint string) {
+func (self *Agent) InitDocker(endpoint string) {
 	// calico powerstrip need explicit version
 	client, err := docker.NewVersionedClient(endpoint, APIVersion)
 	if err != nil {
@@ -160,11 +163,11 @@ func (self *Server) InitDocker(endpoint string) {
 	// TODO(xutao) check docker daemon status
 }
 
-func (self *Server) InitLibNetwork(flag bool) {
+func (self *Agent) InitLibNetwork(flag bool) {
 	self.libnetwork = flag
 }
 
-func (self *Server) InitEtcd(endpoint string) {
+func (self *Agent) InitEtcd(endpoint string) {
 	cfg := etcd.Config{
 		Endpoints: []string{endpoint},
 		Transport: etcd.DefaultTransport,
@@ -183,7 +186,7 @@ func (self *Server) InitEtcd(endpoint string) {
 	// TODO(xutao) check etcd status
 }
 
-func (self *Server) InitCalico(endpoint string) {
+func (self *Agent) InitCalico(endpoint string) {
 	config := api.CalicoAPIConfig{
 		Spec: api.CalicoAPIConfigSpec{
 			DatastoreType: api.EtcdV2,
@@ -199,7 +202,7 @@ func (self *Server) InitCalico(endpoint string) {
 	self.calico = c
 }
 
-func (self *Server) InitLibkv(endpoint string) {
+func (self *Agent) InitLibkv(endpoint string) {
 	etcdEndpoint := endpoint
 	if strings.HasPrefix(endpoint, "http://") {
 		etcdEndpoint = endpoint[7:]
@@ -217,7 +220,7 @@ func (self *Server) InitLibkv(endpoint string) {
 	self.libkv = kv
 }
 
-func (self *Server) InitLainlet(endpoint string) error {
+func (self *Agent) InitLainlet(endpoint string) error {
 	client := lainlet.New(endpoint)
 	retryCounter := 0
 	for {
@@ -239,22 +242,22 @@ func (self *Server) InitLainlet(endpoint string) error {
 	return nil
 }
 
-func (self *Server) InitInterface(iface string) {
+func (self *Agent) InitInterface(iface string) {
 	self.iface = iface
 }
 
-func (self *Server) InitIptables() {
+func (self *Agent) InitIptables() {
 	initIptables()
 }
 
-func (self *Server) InitDomain(domain string) {
+func (self *Agent) InitDomain(domain string) {
 	if domain != "" {
 		self.domain = domain
 		log.Info(fmt.Sprintf("Domain %s", domain))
 	}
 }
 
-func (self *Server) InitHostname(hostname string) {
+func (self *Agent) InitHostname(hostname string) {
 	if hostname != "" {
 		self.hostname = hostname
 		return
@@ -267,7 +270,7 @@ func (self *Server) InitHostname(hostname string) {
 	log.Info(fmt.Sprintf("Hostname %s", self.hostname))
 }
 
-func (self *Server) InitAddress(ip string) {
+func (self *Agent) InitAddress(ip string) {
 	if ip == "" {
 		// default ip: iface's first ip
 		ifi, err := net.InterfaceByName(self.iface)
@@ -295,7 +298,7 @@ func (self *Server) InitAddress(ip string) {
 	log.Info(fmt.Sprintf("HostIP %s", self.ip))
 }
 
-func (self *Server) InitGodns(addr string, extra bool) {
+func (self *Agent) InitGodns(addr string, extra bool) {
 	// TODO(xutao) check host & server
 	self.godns = godns.New(addr, self.ip, self.libkv, self.lainlet, log, extra)
 	self.tinydnsStopCh = make(chan struct{})
@@ -304,26 +307,30 @@ func (self *Server) InitGodns(addr string, extra bool) {
 	self.swarmIsRunning = false
 }
 
-func (self *Server) InitAcl() {
+func (self *Agent) InitApiServer(addr string) {
+	self.api = apiserver.New(addr, self.godns)
+}
+
+func (self *Agent) InitAcl() {
 	self.acl = acl.New(log, self.lainlet)
 }
 
-func (self *Server) InitWebrouter() {
+func (self *Agent) InitWebrouter() {
 	self.webrouterStopCh = make(chan struct{})
 	self.webrouterIsRunning = false
 }
 
-func (self *Server) InitStreamrouter() {
+func (self *Agent) InitStreamrouter() {
 	self.streamrouterStopCh = make(chan struct{})
 	self.streamrouterIsRunning = false
 }
 
-func (self *Server) InitDeployd() {
+func (self *Agent) InitDeployd() {
 	self.deploydStopCh = make(chan struct{})
 	self.deploydIsRunning = false
 }
 
-func (self *Server) InitEventChan() {
+func (self *Agent) InitEventChan() {
 	self.eventCh = make(chan int)
 	self.stopCh = make(chan struct{})
 	self.lainletStopCh = make(chan struct{})
@@ -331,7 +338,7 @@ func (self *Server) InitEventChan() {
 	self.healthStopCh = make(chan struct{})
 }
 
-func (self *Server) ListLainletContainers() (containers JSONLainletContainers, err error) {
+func (self *Agent) ListLainletContainers() (containers JSONLainletContainers, err error) {
 	url := fmt.Sprintf("/v2/containers?nodename=%s", self.hostname)
 	data, err := self.lainlet.Get(url, 0)
 	if err != nil {
@@ -341,7 +348,7 @@ func (self *Server) ListLainletContainers() (containers JSONLainletContainers, e
 	return containers, err
 }
 
-func (self *Server) FetchNetworkdVirtualIps() {
+func (self *Agent) FetchNetworkdVirtualIps() {
 	kapi := etcd.NewKeysAPI(*self.etcd)
 	resp, err := kapi.Get(context.Background(), EtcdNetworkdVirtualIpKey, &etcd.GetOptions{Recursive: true})
 
@@ -376,7 +383,7 @@ func (self *Server) FetchNetworkdVirtualIps() {
 	self.lockedIps = ips
 }
 
-func (self *Server) WatchNetworkdVirtualIps() {
+func (self *Agent) WatchNetworkdVirtualIps() {
 	ctx := context.Background()
 	kapi := etcd.NewKeysAPI(*self.etcd)
 	watcher := kapi.Watcher(EtcdNetworkdVirtualIpKey, &etcd.WatcherOptions{Recursive: true})
@@ -409,7 +416,7 @@ func (self *Server) WatchNetworkdVirtualIps() {
 
 }
 
-func (self *Server) WatchLainlet(watchKey string, stopCh <-chan struct{}, callback func(event *lainlet.Response)) {
+func (self *Agent) WatchLainlet(watchKey string, stopCh <-chan struct{}, callback func(event *lainlet.Response)) {
 	retryCounter := 0
 	for {
 		ctx := context.Background()
@@ -460,7 +467,7 @@ func (self *Server) WatchLainlet(watchKey string, stopCh <-chan struct{}, callba
 
 }
 
-func (self *Server) WatchLainletVirtualIps() {
+func (self *Agent) WatchLainletVirtualIps() {
 	self.WatchLainlet("/v2/configwatcher?target=vips&heartbeat=5", nil, func(event *lainlet.Response) {
 		keyPrefixLength := len(LainLetVirtualIpKey) + 1
 		currentUnixTime := time.Now().Unix()
@@ -520,7 +527,7 @@ func (self *Server) WatchLainletVirtualIps() {
 	})
 }
 
-func (self *Server) WatchProcIps(stopWatchCh <-chan struct{}, app string, proc string) <-chan int {
+func (self *Agent) WatchProcIps(stopWatchCh <-chan struct{}, app string, proc string) <-chan int {
 	// TODO(xutao) watch lainlet
 	kv := self.libkv
 	key := fmt.Sprintf("%s/%s/%s", EtcdAppNetworkdKey, app, proc)
@@ -598,11 +605,11 @@ func (self *Server) WatchProcIps(stopWatchCh <-chan struct{}, app string, proc s
 }
 
 // TODO(xutao) move to webrouter app
-func (self *Server) WatchWebrouterIps(stopWatchCh <-chan struct{}) <-chan int {
+func (self *Agent) WatchWebrouterIps(stopWatchCh <-chan struct{}) <-chan int {
 	return self.WatchProcIps(stopWatchCh, "webrouter", "worker")
 }
 
-func (self *Server) ApplyWebrouterIps() {
+func (self *Agent) ApplyWebrouterIps() {
 	kv := self.libkv
 	var servers []string
 	key := fmt.Sprintf("%s/webrouter/worker", EtcdAppNetworkdKey)
@@ -659,7 +666,7 @@ func (self *Server) ApplyWebrouterIps() {
 	}
 }
 
-func (self *Server) WatchLeaderIps(stopWatchCh <-chan struct{}, key string) <-chan int {
+func (self *Agent) WatchLeaderIps(stopWatchCh <-chan struct{}, key string) <-chan int {
 	kv := self.libkv
 	eventCh := make(chan int)
 	go func() {
@@ -734,11 +741,11 @@ func (self *Server) WatchLeaderIps(stopWatchCh <-chan struct{}, key string) <-ch
 	return eventCh
 }
 
-func (self *Server) WatchDeploydIps(stopWatchCh <-chan struct{}) <-chan int {
+func (self *Agent) WatchDeploydIps(stopWatchCh <-chan struct{}) <-chan int {
 	return self.WatchLeaderIps(stopWatchCh, EtcdDeploydKey)
 }
 
-func (self *Server) ApplyDeploydIps() {
+func (self *Agent) ApplyDeploydIps() {
 	kv := self.libkv
 	key := EtcdDeploydKey
 	pair, err := kv.Get(key)
@@ -758,16 +765,16 @@ func (self *Server) ApplyDeploydIps() {
 	splitKey := strings.SplitN(value, ":", 2)
 	ip, _ := splitKey[0], splitKey[1]
 	ips := []string{ip}
-	self.godns.AddAddress("deployd.lain", ips, "")
+	self.godns.AddHost("deployd.lain", ips, "")
 }
 
-func (self *Server) WatchSwarmIps(stopWatchCh <-chan struct{}) <-chan int {
+func (self *Agent) WatchSwarmIps(stopWatchCh <-chan struct{}) <-chan int {
 	// swarm leader key default ttl: 20
 	// TODO(xutao) watch lainlet
 	return self.WatchLeaderIps(stopWatchCh, EtcdSwarmKey)
 }
 
-func (self *Server) ApplySwarmIps() {
+func (self *Agent) ApplySwarmIps() {
 	kv := self.libkv
 	key := EtcdSwarmKey
 	pair, err := kv.Get(key)
@@ -787,10 +794,10 @@ func (self *Server) ApplySwarmIps() {
 	splitKey := strings.SplitN(value, ":", 2)
 	ip, _ := splitKey[0], splitKey[1]
 	ips := []string{ip}
-	self.godns.AddAddress("swarm.lain", ips, "")
+	self.godns.AddHost("swarm.lain", ips, "")
 }
 
-func (self *Server) RunHealth() {
+func (self *Agent) RunHealth() {
 	if self.healthIsRunning {
 		return
 	}
@@ -826,7 +833,7 @@ func (self *Server) RunHealth() {
 	}()
 }
 
-func (self *Server) StopHealth() {
+func (self *Agent) StopHealth() {
 	log.Debug("Stop health")
 	if self.healthIsRunning {
 		self.healthIsRunning = false
@@ -834,7 +841,7 @@ func (self *Server) StopHealth() {
 	}
 }
 
-func (self *Server) CreateAppKey(item *VirtualIpItem) {
+func (self *Agent) CreateAppKey(item *VirtualIpItem) {
 	if item.port == "" {
 		return
 	}
@@ -855,7 +862,7 @@ func (self *Server) CreateAppKey(item *VirtualIpItem) {
 	)
 }
 
-func (self *Server) GetAppKey(item *VirtualIpItem) string {
+func (self *Agent) GetAppKey(item *VirtualIpItem) string {
 	key := fmt.Sprintf("%s/%s/%s/%s:%s", EtcdAppNetworkdKey, item.appName, item.procName, item.ip, item.port)
 	kapi := etcd.NewKeysAPI(*self.etcd)
 
@@ -900,7 +907,7 @@ func (self *Server) GetAppKey(item *VirtualIpItem) string {
 	}
 }
 
-func (self *Server) DeleteAppKey(item *VirtualIpItem) {
+func (self *Agent) DeleteAppKey(item *VirtualIpItem) {
 	if item.port == "" {
 		return
 	}
@@ -919,7 +926,7 @@ func (self *Server) DeleteAppKey(item *VirtualIpItem) {
 	)
 }
 
-func (self *Server) RunElect() {
+func (self *Agent) RunElect() {
 	self.electIsRunning = true
 	candidate := leadership.NewCandidate(self.libkv,
 		EtcdNetworkdLeaderKey,
@@ -962,7 +969,7 @@ func (self *Server) RunElect() {
 	}()
 }
 
-func (self *Server) WatchElect(stopWatchCh <-chan struct{}) {
+func (self *Agent) WatchElect(stopWatchCh <-chan struct{}) {
 	// TODO(xutao) watch lainlet
 	kv := self.libkv
 	key := EtcdNetworkdLeaderKey
@@ -1065,7 +1072,7 @@ func (self *Server) WatchElect(stopWatchCh <-chan struct{}) {
 
 }
 
-func (self *Server) StopElect() {
+func (self *Agent) StopElect() {
 	log.Debug("Stop elect")
 	if self.electIsRunning {
 		self.electIsRunning = false
@@ -1073,7 +1080,7 @@ func (self *Server) StopElect() {
 	}
 }
 
-func (self *Server) LockVirtualIp(ip string, containerName string) (state int, err error) {
+func (self *Agent) LockVirtualIp(ip string, containerName string) (state int, err error) {
 
 	self.CreateContainerVipKey(containerName, ip)
 
@@ -1185,7 +1192,7 @@ func (self *Server) LockVirtualIp(ip string, containerName string) (state int, e
 	}
 }
 
-func (self *Server) GetLockedVipHostname(ip string) string {
+func (self *Agent) GetLockedVipHostname(ip string) string {
 	// TODO(xutao) remove log.Fatal?
 	key := fmt.Sprintf("%s/%s.lock", EtcdNetworkdVirtualIpKey, ip)
 	kapi := etcd.NewKeysAPI(*self.etcd)
@@ -1235,7 +1242,7 @@ func (self *Server) GetLockedVipHostname(ip string) string {
 	}
 }
 
-func (self *Server) UnLockVirtualIp(ip string, containerName string) (state int, err error) {
+func (self *Agent) UnLockVirtualIp(ip string, containerName string) (state int, err error) {
 	// TODO(xutao) remove log.Fatal?
 	key := fmt.Sprintf("%s/%s.lock", EtcdNetworkdVirtualIpKey, ip)
 	value := self.hostname
@@ -1310,7 +1317,7 @@ func (self *Server) UnLockVirtualIp(ip string, containerName string) (state int,
 	return LockerStateDeleted, nil
 }
 
-func (self *Server) RemoveVirtualIpLock(lockedIp LockedIp) (state int, err error) {
+func (self *Agent) RemoveVirtualIpLock(lockedIp LockedIp) (state int, err error) {
 	ip := lockedIp.ip
 	key := fmt.Sprintf("%s/%s.lock", EtcdNetworkdVirtualIpKey, ip)
 	kapi := etcd.NewKeysAPI(*self.etcd)
@@ -1336,27 +1343,32 @@ func (self *Server) RemoveVirtualIpLock(lockedIp LockedIp) (state int, err error
 	return LockerStateDeleted, nil
 }
 
-func (self *Server) RunGodns() {
+func (self *Agent) RunGodns() {
 	log.Info("Run Godns")
 	go self.godns.Run()
 }
 
-func (self *Server) StopGodns() {
+func (self *Agent) RunApiServer() {
+	log.Info("Run Api server")
+	go self.api.Run()
+}
+
+func (self *Agent) StopGodns() {
 	log.Info("Stop Godns")
 	self.godns.Stop()
 }
 
-func (self *Server) RunAcl() {
+func (self *Agent) RunAcl() {
 	log.Info("Run Acl")
 	go self.acl.RunAcl()
 }
 
-func (self *Server) StopAcl() {
+func (self *Agent) StopAcl() {
 	log.Info("Stop Acl")
 	self.acl.StopAcl()
 }
 
-func (self *Server) RunWebrouter() {
+func (self *Agent) RunWebrouter() {
 	if self.webrouterIsRunning {
 		return
 	}
@@ -1383,7 +1395,7 @@ func (self *Server) RunWebrouter() {
 	}()
 }
 
-func (self *Server) StopWebrouter() {
+func (self *Agent) StopWebrouter() {
 	if self.webrouterIsRunning {
 		log.Debug("Stop webrouter")
 		self.webrouterIsRunning = false
@@ -1391,7 +1403,7 @@ func (self *Server) StopWebrouter() {
 	}
 }
 
-func (self *Server) RunSwarm() {
+func (self *Agent) RunSwarm() {
 	if self.swarmIsRunning {
 		return
 	}
@@ -1418,7 +1430,7 @@ func (self *Server) RunSwarm() {
 	}()
 }
 
-func (self *Server) StopSwarm() {
+func (self *Agent) StopSwarm() {
 	if self.swarmIsRunning {
 		log.Debug("Stop swarm")
 		self.swarmIsRunning = false
@@ -1426,7 +1438,7 @@ func (self *Server) StopSwarm() {
 	}
 }
 
-func (self *Server) RunDeployd() {
+func (self *Agent) RunDeployd() {
 	if self.deploydIsRunning {
 		return
 	}
@@ -1453,7 +1465,7 @@ func (self *Server) RunDeployd() {
 	}()
 }
 
-func (self *Server) StopDeployd() {
+func (self *Agent) StopDeployd() {
 	if self.deploydIsRunning {
 		log.Debug("Stop deployd")
 		self.deploydIsRunning = false
@@ -1461,7 +1473,7 @@ func (self *Server) StopDeployd() {
 	}
 }
 
-func (self *Server) RunLainlet() {
+func (self *Agent) RunLainlet() {
 	log.Info("Run lainlet begin")
 	self.InitVirtualIpDb()
 	self.InitContainerDb()
@@ -1496,17 +1508,18 @@ func (self *Server) RunLainlet() {
 	}()
 }
 
-func (self *Server) StopLainlet() {
+func (self *Agent) StopLainlet() {
 	log.Debug("Stop")
 	self.lainletStopCh <- struct{}{}
 }
 
-func (self *Server) Run() {
+func (self *Agent) Run() {
 	self.healthIsRunning = false
 	self.electIsRunning = false
 	self.InitEventChan()
 	self.RunElect()
 	self.RunGodns()
+	self.RunApiServer()
     if self.aclFlag {
 		self.RunAcl()
 	}
@@ -1519,7 +1532,7 @@ func (self *Server) Run() {
 	self.wg.Wait()
 }
 
-func (self *Server) Stop() {
+func (self *Agent) Stop() {
 	log.Info("Stop networkd")
 	if self.swarmFlag {
 		self.StopSwarm()

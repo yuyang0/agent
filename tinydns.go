@@ -9,7 +9,7 @@ import (
 
 const EtcdTinydnsKey = "/lain/config/tinydns_fqdns"
 
-func (self *Server) RunTinydns() {
+func (self *Agent) RunTinydns() {
 	if self.tinydnsIsRunning {
 		return
 	}
@@ -36,7 +36,7 @@ func (self *Server) RunTinydns() {
 	}()
 }
 
-func (self *Server) StopTinydns() {
+func (self *Agent) StopTinydns() {
 	if self.tinydnsIsRunning {
 		log.Debug("Stop tinydns")
 		self.tinydnsIsRunning = false
@@ -45,11 +45,11 @@ func (self *Server) StopTinydns() {
 }
 
 // TODO(xutao) move to tinydns app
-func (self *Server) WatchTinydnsIps(stopWatchCh <-chan struct{}) <-chan int {
+func (self *Agent) WatchTinydnsIps(stopWatchCh <-chan struct{}) <-chan int {
 	return self.WatchProcIps(stopWatchCh, "tinydns", "worker")
 }
 
-func (self *Server) ApplyTinydnsIps() {
+func (self *Agent) ApplyTinydnsIps() {
 	kv := self.libkv
 	var servers []string
 	key := fmt.Sprintf("%s/tinydns/worker", EtcdAppNetworkdKey)
@@ -78,7 +78,7 @@ func (self *Server) ApplyTinydnsIps() {
 	}
 }
 
-func (self *Server) AddTinydnsDomain(domain string, data []string) {
+func (self *Agent) AddTinydnsDomain(domain string, data []string) {
 	kv := self.libkv
 	key := fmt.Sprintf("%s/%s", EtcdTinydnsKey, domain)
 	value, err := json.Marshal(data)
