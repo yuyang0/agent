@@ -6,6 +6,7 @@ import (
 	"strings"
 	"fmt"
 	"strconv"
+	"github.com/deckarep/golang-set"
 )
 
 func isDomain(domain string) bool {
@@ -42,4 +43,11 @@ func parseServerAddr(addr string) (ip, port string, err error) {
 		port = parts[1]
 	}
 	return
+}
+func setToStringSlice(s mapset.Set) []string {
+	var v []string
+	for ele := range s.Iter() {
+		v = append(v, ele.(string))
+	}
+	return v
 }

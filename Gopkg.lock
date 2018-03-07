@@ -98,6 +98,12 @@
   revision = "5215b55f46b2b919f50a1df0eaa5886afe4e3b3d"
 
 [[projects]]
+  name = "github.com/deckarep/golang-set"
+  packages = ["."]
+  revision = "1d4478f51bed434f1dadf96dcd9b43aabac66795"
+  version = "v1.7"
+
+[[projects]]
   name = "github.com/docker/distribution"
   packages = [
     "digest",
@@ -430,8 +436,7 @@
     "internal/socket",
     "ipv4",
     "ipv6",
-    "lex/httplex",
-    "publicsuffix"
+    "lex/httplex"
   ]
   revision = "d25186b37f34ebdbbea8f488ef055638dfab272d"
 
@@ -642,6 +647,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "599906f07e4055d000a94e3b1e94c2ca01c3bb081aed26ca69d875481bd2d71e"
+  inputs-digest = "0ca685b8336348b37957b614ce80c88b26867ebd94c1e9393ef600a952c222e7"
   solver-name = "gps-cdcl"
   solver-version = 1

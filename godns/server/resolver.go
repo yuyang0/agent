@@ -10,6 +10,7 @@ import (
 
 	"github.com/miekg/dns"
 	"bytes"
+	"github.com/deckarep/golang-set"
 )
 
 type ResolvError struct {
@@ -29,20 +30,21 @@ type RResp struct {
 }
 
 type Resolver struct {
-	mu            sync.RWMutex
+	mu sync.RWMutex
 	// the total upstream server list, contain 2 parts
 	// 1. server list in resolv.conf
 	// 2. server list from other place eg: server file
-	servers       []string
+	servers mapset.Set
 	// server list in resolv.conf
-	resolvServers []string
+	resolvServers mapset.Set
 	// upstream server for specified domain
 	domainServers *suffixTreeNode
 }
 
 func NewResolver() *Resolver {
 	r := &Resolver{
-		servers:       []string{},
+		resolvServers: mapset.NewSet(),
+		servers:       mapset.NewSet(),
 		domainServers: newSuffixTreeRoot(),
 	}
 
@@ -54,14 +56,58 @@ func NewResolver() *Resolver {
 	}
 	for _, server := range clientConfig.Servers {
 		nameserver := net.JoinHostPort(server, clientConfig.Port)
-		r.resolvServers = append(r.resolvServers, nameserver)
+		r.resolvServers.Add(nameserver)
+		r.servers.Add(nameserver)
 	}
-
 	return r
 }
 
+func (r *Resolver) ReplaceDomainServers(data map[string][]string) {
+	domainServers := newSuffixTreeRoot()
+	for domain, v := range data {
+		for _, addr := range v {
+			ip, port, err := parseServerAddr(addr)
+			if err != nil {
+				glog.Warnf("%s", err.Error())
+				continue
+			}
+			domainServers.sinsert(strings.Split(domain, "."), net.JoinHostPort(ip, port))
+		}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.domainServers = domainServers
+}
+
+func (r *Resolver) DumpConfig() []byte {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var data []byte
+
+	literal := "\n\n# servers\n"
+	data = append(data, literal...)
+
+	r.domainServers.iterFunc(nil, func(keys []string, v mapset.Set) {
+		domain := strings.Join(keys, ".")
+		for val := range v.Iter() {
+			content := fmt.Sprintf("server=/%s/%s\n", domain, val.(string))
+			data = append(data, content...)
+		}
+	})
+
+	literal = "\n\n# name servers\n"
+	data = append(data, literal...)
+	for v := range r.servers.Iter() {
+		content := fmt.Sprintf("nameserver %s\n", v.(string))
+		data = append(data, content...)
+	}
+	return data
+
+}
+
 func (r *Resolver) ParseServerList(buf []byte) {
-	var servers []string
+	servers := mapset.NewSet()
 	domainServers := newSuffixTreeRoot()
 	scanner := bufio.NewScanner(bytes.NewReader(buf))
 	for scanner.Scan() {
@@ -84,7 +130,7 @@ func (r *Resolver) ParseServerList(buf []byte) {
 		case 3:
 			domain := tokens[1]
 			addr := tokens[2]
-
+			// TODO: check domain
 			// if !isDomain(domain) {
 			// 	glog.Warnf("%s is not a domain.", domain)
 			// 	continue
@@ -101,13 +147,13 @@ func (r *Resolver) ParseServerList(buf []byte) {
 				glog.Warnf("%s", err.Error())
 				continue
 			}
-			servers = append(servers, net.JoinHostPort(ip, port))
+			servers.Add(net.JoinHostPort(ip, port))
 		}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	servers = append(servers, r.resolvServers...)
+	servers.Union(r.resolvServers)
 	r.servers = servers
 	r.domainServers = domainServers
 }
@@ -162,7 +208,7 @@ func (r *Resolver) Lookup(net string, req *dns.Msg) (message *dns.Msg, err error
 	defer ticker.Stop()
 	// Start lookup on each nameserver top-down, in every second
 	nameservers := r.nameservers(qname)
-	glog.Debugf("qname: %s, nameservers: %v", qname, nameservers)
+	glog.Infof("qname: %s, nameservers: %v, resolv: %v", qname, nameservers, r.resolvServers)
 	for _, nameserver := range nameservers {
 		wg.Add(1)
 		go L(nameserver)
@@ -189,19 +235,21 @@ func (r *Resolver) Lookup(net string, req *dns.Msg) (message *dns.Msg, err error
 // Namservers return the array of nameservers, with port number appended.
 // '#' in the name is treated as port separator, as with dnsmasq.
 func (r *Resolver) nameservers(qname string) []string {
-	queryKeys := strings.Split(qname, ".")
-	queryKeys = queryKeys[:len(queryKeys)-1] // ignore last '.'
+	name := strings.TrimSuffix(qname, ".")
+	queryKeys := strings.Split(name, ".")
 
 	var ns []string
 	if v, found := r.domainServers.search(queryKeys); found {
 		glog.Debugf("%s be found in domain server list, upstream: %v", qname, v)
-		ns = append(ns, v...)
+		for sval := range v.Iter() {
+			ns = append(ns, sval.(string))
+		}
 		//Ensure query the specific upstream nameserver in async Lookup() function.
 		return ns
 	}
 
-	for _, nameserver := range r.servers {
-		ns = append(ns, nameserver)
+	for nameserver := range r.servers.Iter() {
+		ns = append(ns, nameserver.(string))
 	}
 	return ns
 }

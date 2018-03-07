@@ -1,4 +1,5 @@
 networkd
+agent
 *DS_Store
 vendor/
 .idea/

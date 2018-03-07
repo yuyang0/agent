@@ -133,14 +133,25 @@ func (srv *Server) Stop() {
 	}
 }
 
-func (self *Server) ReplaceAddresses(data map[string]string) {
-	glog.Debugf("replace Address %v", data)
-	self.ldata.Replace(data)
+func (self *Server) ReplaceHosts(data map[string]string) {
+	glog.Debugf("replace hosts %v", data)
+	self.ldata.ReplaceHosts(data)
 }
 
-func (self *Server) ReplaceDomainServers(data []byte) {
-	glog.Debugf("replace domain servers %v", string(data[:]))
-	self.resolver.ParseServerList(data)
+func (self *Server) ReplaceAddresses(data map[string] []string) {
+	glog.Debugf("replace Address %v", data)
+	self.ldata.ReplaceWildcardHosts(data)
+}
+
+func (self *Server) ReplaceDomainServers(data map[string][]string) {
+	glog.Debugf("replace domain servers %v", data)
+	self.resolver.ReplaceDomainServers(data)
+}
+
+func (self *Server) DumpAllConfig() string {
+	data := self.ldata.DumpConfig()
+	data = append(data, self.resolver.DumpConfig()...)
+	return string(data)
 }
 
 func (srv *Server) startDnsServers() {

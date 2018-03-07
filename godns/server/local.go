@@ -3,76 +3,100 @@ package server
 import (
 	"net"
 	"strings"
-    "bufio"
+	"bufio"
 	"sync"
-	"golang.org/x/net/publicsuffix"
 	"bytes"
+	"fmt"
+	"github.com/deckarep/golang-set"
 )
 
 type LocalData struct {
-	hosts map[string]string
-	mu    sync.RWMutex
+	// record in hosts file, will match the domain exactly
+	hosts         map[string]string
+	// records in address file, will match all the subdomains
+	wildcardHosts *suffixTreeNode
+	mu            sync.RWMutex
 }
 
-func NewLocalData() *LocalData{
+func NewLocalData() *LocalData {
 	d := &LocalData{
-		hosts: make(map[string]string),
+		hosts:         make(map[string]string),
+		wildcardHosts: newSuffixTreeRoot(),
 	}
 	return d
 }
 
-func (f *LocalData) Get(domain string) ([]string, bool) {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
+func (d *LocalData) DumpConfig() []byte {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	var data []byte
+	literal := "# hosts\n"
+	data = append(data, literal...)
+	for domain, ip := range d.hosts {
+		content := fmt.Sprintf("%s %s\n", ip, domain)
+		data = append(data, content...)
+	}
+	literal = "\n\n# addresses\n"
+	data = append(data, literal...)
+	d.wildcardHosts.iterFunc(nil, func(keys []string, v mapset.Set) {
+		domain := strings.Join(keys, ".")
+		for val := range v.Iter() {
+			content := fmt.Sprintf("address=/%s/%s\n", domain, val.(string))
+			data = append(data, content...)
+		}
+	})
+	return data
+}
+func (d *LocalData) Get(domain string) ([]string, bool) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 	domain = strings.ToLower(domain)
-	ip, ok := f.hosts[domain]
+	domain = strings.TrimSuffix(domain, ".")
+	ip, ok := d.hosts[domain]
 	if ok {
 		return []string{ip}, true
 	}
 
-	sld, err := publicsuffix.EffectiveTLDPlusOne(domain)
-	if err != nil {
-		return nil, false
+	queryKeys := strings.Split(domain, ".")
+
+	if v, found := d.wildcardHosts.search(queryKeys); found {
+		glog.Debugf("%s be found in address list, ips: %v", domain, v)
+		return setToStringSlice(v), true
 	}
-
-	for host, ip := range f.hosts {
-		if strings.HasPrefix(host, "*.") || strings.HasPrefix(host, ".") {
-			old, err := publicsuffix.EffectiveTLDPlusOne(host)
-			if err != nil {
-				continue
-			}
-			if sld == old {
-				return []string{ip}, true
-			}
-		}
-
-		old, err := publicsuffix.EffectiveTLDPlusOne(host)
-		if err != nil {
-			continue
-		}
-		if sld == old {
-			return []string{ip}, true
-		}
-	}
-
 	return nil, false
 }
 
-func (d *LocalData) Set(domain, ip string) {
+func (d *LocalData) ReplaceWildcardHostsWithBytes(buf []byte) {
+	hosts := parseAddressList(buf)
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.hosts[domain] = ip
+	d.wildcardHosts = hosts
 }
 
-func (d *LocalData) ReplaceWithBytes(buf []byte) {
-	hosts := parseAddressList(buf)
-	d.Replace(hosts)
-}
-
-func (d *LocalData) Replace(hosts map[string]string) {
+func (d *LocalData) ReplaceHosts(hosts map[string]string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.hosts = hosts
+}
+
+func (d *LocalData) ReplaceWildcardHosts(data map[string][]string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	hosts := newSuffixTreeRoot()
+	for domain, v := range data {
+			domain = strings.TrimPrefix(domain, ".")
+			domain = strings.TrimPrefix(domain, "*.")
+			domain = strings.ToLower(domain)
+
+			for _, ip := range v {
+				if !isDomain(domain) || !isIP(ip) {
+					continue
+				}
+				hosts.sinsert(strings.Split(domain, "."), ip)
+			}
+	}
+	d.wildcardHosts = hosts
 }
 
 func (h *LocalData) GetIpList(domain string, family int) ([]net.IP, bool) {
@@ -103,8 +127,8 @@ func (h *LocalData) GetIpList(domain string, family int) ([]net.IP, bool) {
 	return ips, ips != nil
 }
 
-func parseAddressList(buf []byte) map[string]string {
-	hosts := make(map[string]string)
+func parseAddressList(buf []byte) *suffixTreeNode {
+	hosts := newSuffixTreeRoot()
 	scanner := bufio.NewScanner(bytes.NewReader(buf))
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -125,12 +149,16 @@ func parseAddressList(buf []byte) map[string]string {
 		switch len(tokens) {
 		case 3:
 			domain := tokens[1]
+			domain = strings.TrimPrefix(domain, ".")
+			domain = strings.TrimPrefix(domain, "*.")
+			domain = strings.ToLower(domain)
+
 			ip := tokens[2]
 
 			if !isDomain(domain) || !isIP(ip) {
 				continue
 			}
-			hosts[domain] = ip
+			hosts.sinsert(strings.Split(domain, "."), ip)
 		}
 	}
 	return hosts

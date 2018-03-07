@@ -1,8 +1,10 @@
 package server
 
+import "github.com/deckarep/golang-set"
+
 type suffixTreeNode struct {
 	key      string
-	value    []string
+	value    mapset.Set
 	children map[string]*suffixTreeNode
 }
 
@@ -11,9 +13,9 @@ func newSuffixTreeRoot() *suffixTreeNode {
 }
 
 func newSuffixTree(key string, value string) *suffixTreeNode {
-	var v []string
+	v := mapset.NewSet()
 	if value != "" {
-		v = append(v, value)
+		v.Add(value)
 	}
 	root := &suffixTreeNode{
 		key:      key,
@@ -31,7 +33,7 @@ func (node *suffixTreeNode) ensureSubTree(key string) {
 
 func (node *suffixTreeNode) insert(key string, value string) {
 	if c, ok := node.children[key]; ok {
-		c.value = append(c.value, value)
+		c.value.Add(value)
 	} else {
 		node.children[key] = newSuffixTree(key, value)
 	}
@@ -52,7 +54,7 @@ func (node *suffixTreeNode) sinsert(keys []string, value string) {
 	node.insert(key, value)
 }
 
-func (node *suffixTreeNode) search(keys []string) ([]string, bool) {
+func (node *suffixTreeNode) search(keys []string) (mapset.Set, bool) {
 	if len(keys) == 0 {
 		return nil, false
 	}
@@ -62,8 +64,26 @@ func (node *suffixTreeNode) search(keys []string) ([]string, bool) {
 		if nextValue, found := n.search(keys[:len(keys)-1]); found {
 			return nextValue, found
 		}
-		return n.value, len(n.value) != 0
+		return n.value, n.value.Cardinality() != 0
 	}
-
 	return nil, false
+}
+
+func copyStringSlice(sl []string) []string {
+	var new []string
+	for _, v := range sl {
+		new = append(new, v)
+	}
+	return new
+}
+
+func (node *suffixTreeNode) iterFunc(keys []string, fun func([]string, mapset.Set)) {
+	if node.value.Cardinality() > 0 {
+		fun(keys, node.value)
+	}
+	for k, child := range node.children {
+		newKeys := copyStringSlice(keys)
+		newKeys = append(newKeys, k)
+		child.iterFunc(newKeys, fun)
+	}
 }

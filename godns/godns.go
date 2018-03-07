@@ -12,8 +12,8 @@ import (
 	"github.com/yuyang0/agent/godns/server"
 )
 
-const EtcdAddressPrefixKey = "dnsmasq_addresses"
-const EtcdServerPrefixKey = "dnsmasq_servers"
+const EtcdGodnsHostsPrefixKey = "dnsmasq_addresses"
+const EtcdGodnsServerPrefixKey = "dnsmasq_servers"
 const EtcdDomainPrefixKey = "domain"
 const EtcdPrefixKey = "/lain/config"
 
@@ -114,11 +114,11 @@ func (self *Godns) Run() {
 	for {
 		select {
 		case <-self.eventCh:
-			glog.Debug("Received dnsmasq event")
-			self.SaveAddresses()
+			glog.Debug("Received dns event")
+			self.SaveHosts()
 			self.SaveServers()
 		case <-self.cnfEvCh:
-			glog.Debug("Received dnsmasq configure event")
+			glog.Debug("Received dns configure event")
 			self.SaveAddresses()
 		case <-self.stopCh:
 			self.isRunning = false
@@ -138,9 +138,13 @@ func (self *Godns) Stop() {
 	}
 }
 
+func (self *Godns) DumpConfig() string {
+	return self.srv.DumpAllConfig()
+}
+
 func (self *Godns) WatchGodnsAddress(watchCh <-chan struct{}) {
-	keyPrefixLength := len(EtcdAddressPrefixKey) + 1
-	util.WatchConfig(glog, self.lainlet, EtcdAddressPrefixKey, watchCh, func(addrs interface{}) {
+	keyPrefixLength := len(EtcdGodnsHostsPrefixKey) + 1
+	util.WatchConfig(glog, self.lainlet, EtcdGodnsHostsPrefixKey, watchCh, func(addrs interface{}) {
 		var addresses []AddressItem
 		for key, value := range addrs.(map[string]interface{}) {
 			domain := key[keyPrefixLength:]
@@ -153,7 +157,7 @@ func (self *Godns) WatchGodnsAddress(watchCh <-chan struct{}) {
 			err := json.Unmarshal([]byte(value.(string)), &addr)
 			if err != nil {
 				glog.WithFields(logrus.Fields{
-					"key":    fmt.Sprintf("%s/%s/%s", EtcdPrefixKey, EtcdAddressPrefixKey, key),
+					"key":    fmt.Sprintf("%s/%s/%s", EtcdPrefixKey, EtcdGodnsHostsPrefixKey, key),
 					"reason": err,
 				}).Warn("Cannot parse domain config")
 				continue
@@ -190,8 +194,8 @@ func (self *Godns) WatchGodnsAddress(watchCh <-chan struct{}) {
 }
 
 func (self *Godns) WatchGodnsServer(watchCh <-chan struct{}) {
-	keyPrefixLength := len(EtcdServerPrefixKey) + 1
-	util.WatchConfig(glog, self.lainlet, EtcdServerPrefixKey, watchCh, func(addrs interface{}) {
+	keyPrefixLength := len(EtcdGodnsServerPrefixKey) + 1
+	util.WatchConfig(glog, self.lainlet, EtcdGodnsServerPrefixKey, watchCh, func(addrs interface{}) {
 		var servers []ServerItem
 		for key, value := range addrs.(map[string]interface{}) {
 			domain := key[keyPrefixLength:]
@@ -204,7 +208,7 @@ func (self *Godns) WatchGodnsServer(watchCh <-chan struct{}) {
 			err := json.Unmarshal([]byte(value.(string)), &serv)
 			if err != nil {
 				glog.WithFields(logrus.Fields{
-					"key":    fmt.Sprintf("/lain/config/%s/%s", EtcdServerPrefixKey, key),
+					"key":    fmt.Sprintf("/lain/config/%s/%s", EtcdGodnsServerPrefixKey, key),
 					"reason": err,
 				}).Error("Cannot parse domain server config")
 				continue
@@ -239,33 +243,52 @@ func (self *Godns) WatchGodnsServer(watchCh <-chan struct{}) {
 	})
 }
 
-func (self *Godns) SaveAddresses() {
+func (self *Godns) SaveHosts() {
 	data := make(map[string]string)
-	for domain, ip := range self.staticAddr {
-		data[domain] = ip
-	}
 	for _, addr := range self.addresses {
 		data[addr.domain] = addr.ip
 	}
+	self.srv.ReplaceHosts(data)
+}
 
+func (self *Godns) SaveAddresses() {
+	data := make(map[string][]string)
+	for domain, ip := range self.staticAddr {
+		var v []string
+		if old, ok := data[domain]; ok {
+			v = old
+		}
+		v = append(v, ip)
+		data[domain] = v
+	}
 	for _, serv := range self.domains {
-		data[serv.domain] = serv.ip
+		var v []string
+		if old, ok := data[serv.domain]; ok {
+			v = old
+		}
+		v = append(v, serv.ip)
+		data[serv.domain] = v
 	}
 	self.srv.ReplaceAddresses(data)
 }
 
 func (self *Godns) SaveServers() {
-	data := []byte{}
+	data := make(map[string][]string)
 	for _, serv := range self.servers {
-		content := fmt.Sprintf("server=/%s/%s#%s\n", serv.domain, serv.ip, serv.port)
-		data = append(data, content...)
+		var v []string
+		if old, ok := data[serv.domain]; ok {
+			v = old
+		}
+		ip := fmt.Sprintf("%s#%s", serv.ip, serv.port)
+		v = append(v, ip)
+		data[serv.domain] = v
 	}
 	self.srv.ReplaceDomainServers(data)
 }
 
-func (self *Godns) AddAddress(addressDomain string, addressIps []string, addressType string) {
+func (self *Godns) AddHost(addressDomain string, addressIps []string, addressType string) {
 	kv := self.libkv
-	key := fmt.Sprintf("%s/%s/%s", EtcdPrefixKey, EtcdAddressPrefixKey, addressDomain)
+	key := fmt.Sprintf("%s/%s/%s", EtcdPrefixKey, EtcdGodnsHostsPrefixKey, addressDomain)
 	data := JSONAddressConfig{
 		Ips:  addressIps,
 		Type: addressType,
@@ -286,7 +309,7 @@ func (self *Godns) AddAddress(addressDomain string, addressIps []string, address
 			"key":   key,
 			"value": data,
 			"err":   err,
-		}).Error("Cannot put dnsmasq address")
+		}).Error("Cannot put godns host")
 		return
 	}
 }
@@ -294,7 +317,7 @@ func (self *Godns) AddAddress(addressDomain string, addressIps []string, address
 // servers: [1.1.1.1#53, 2.2.2.2#53]
 func (self *Godns) AddServer(domain string, servers []string) {
 	kv := self.libkv
-	key := fmt.Sprintf("%s/%s/%s", EtcdPrefixKey, EtcdServerPrefixKey, domain)
+	key := fmt.Sprintf("%s/%s/%s", EtcdPrefixKey, EtcdGodnsServerPrefixKey, domain)
 	data := JSONServerConfig{
 		Servers: servers,
 	}
@@ -314,7 +337,7 @@ func (self *Godns) AddServer(domain string, servers []string) {
 			"key":   key,
 			"value": data,
 			"err":   err,
-		}).Error("Cannot put dnsmasq server")
+		}).Error("Cannot put godns server")
 		return
 	}
 }
