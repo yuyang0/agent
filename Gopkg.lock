@@ -36,12 +36,6 @@
 
 [[projects]]
   branch = "master"
-  name = "github.com/bradfitz/gomemcache"
-  packages = ["memcache"]
-  revision = "1952afaa557dc08e8e0d89eafab110fb501c1a2b"
-
-[[projects]]
-  branch = "master"
   name = "github.com/codegangsta/inject"
   packages = ["."]
   revision = "33e0aa1cb7c019ccc3fbe049a8262a6403d30504"
@@ -224,12 +218,6 @@
   name = "github.com/gopherjs/gopherjs"
   packages = ["js"]
   revision = "df18d38287ab2ed3138d564e7c8cbe4d5a249d87"
-
-[[projects]]
-  branch = "master"
-  name = "github.com/hoisie/redis"
-  packages = ["."]
-  revision = "b5c6e81454e0395c280f220d82a6854fd0fcf42e"
 
 [[projects]]
   name = "github.com/howeyc/gopass"
@@ -647,6 +635,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "0ca685b8336348b37957b614ce80c88b26867ebd94c1e9393ef600a952c222e7"
+  inputs-digest = "21cbe014911e8d5b740d7aa3182efe141824076eb83755083a3ef16854bf11d4"
   solver-name = "gps-cdcl"
   solver-version = 1
