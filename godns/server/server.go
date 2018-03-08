@@ -18,8 +18,8 @@ const (
 	RESOLV_INTERVAL = 200
 	RESOLV_EDNS0_ON = true
 
-	CACHE_EXPIRE   = 600 // 10 minutes
-	CACHE_MAXCOUNT = 0   // If set zero. The Sum of cache itmes will be unlimit.
+	CACHE_EXPIRE   = 600     // 10 minutes
+	CACHE_MAXCOUNT = 20000   // If set zero. The Sum of cache itmes will be unlimit.
 
 	notIPQuery = 0
 	_IP4Query  = 4
