@@ -37,6 +37,8 @@ func (self *Godns) WatchGodnsExtra(watchCh <-chan struct{}) {
 				})
 			}
 		}
+		self.mu.Lock()
+		defer self.mu.Unlock()
 		if reflect.DeepEqual(self.addresses, domainAddrs) {
 			return
 		}
@@ -63,9 +65,13 @@ func (self *Godns) WatchVip(watchCh <-chan struct{}) {
 		if lastIp == ip {
 			return
 		}
+
+		self.mu.Lock()
 		for i, _ := range self.addresses {
 			self.addresses[i].ip = ip
 		}
+		self.mu.Unlock()
+
 		self.eventCh <- 1
 	})
 }

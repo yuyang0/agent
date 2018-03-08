@@ -10,6 +10,7 @@ import (
 	lainlet "github.com/laincloud/lainlet/client"
 	"github.com/yuyang0/agent/util"
 	"github.com/yuyang0/agent/godns/server"
+	"sync"
 )
 
 const EtcdGodnsHostsPrefixKey = "dnsmasq_addresses"
@@ -33,13 +34,15 @@ type ServerItem struct {
 }
 
 type Godns struct {
+	mu sync.RWMutex
+
 	ip            string
 	vip           string
 	libkv         store.Store
 	srv           *server.Server
 	isRunning     bool
 	stopCh        chan struct{}
-	eventCh       chan int
+	eventCh       chan interface{}
 
 	hosts         []AddressItem
 	domainServers []ServerItem
@@ -89,7 +92,7 @@ func New(dnsAddr string, ip string, kv store.Store, lainlet *lainlet.Client, log
 		libkv:     kv,
 		lainlet:   lainlet,
 		stopCh:    make(chan struct{}),
-		eventCh:   make(chan int),
+		eventCh:   make(chan interface{}, 10),
 		isRunning: false,
 		extra:     extra,
 		staticAddr: staticAddr,
@@ -111,6 +114,7 @@ func (self *Godns) Run() {
 		select {
 		case <-self.eventCh:
 			glog.Debug("Received dns event")
+			removeAllElementsInChan(self.eventCh)
 			self.SaveHosts()
 			self.SaveDomainServers()
 			self.SaveAddresses()
@@ -176,8 +180,9 @@ func (self *Godns) WatchGodnsHosts(watchCh <-chan struct{}) {
 					hosts = append(hosts, item)
 				}
 			}
-
+			self.mu.Lock()
 			self.hosts = hosts
+			self.mu.Unlock()
 		}
 		self.eventCh <- 1
 	})
@@ -228,24 +233,33 @@ func (self *Godns) WatchGodnsServer(watchCh <-chan struct{}) {
 				"server": serv,
 			}).Debug("Get domain config from lainlet")
 		}
+
+		self.mu.Lock()
 		self.domainServers = servers
+		self.mu.Unlock()
+
 		self.eventCh <- 1
 	})
 }
 
 func (self *Godns) SaveHosts() {
 	data := make(map[string]string)
+
+	self.mu.RLock()
 	for domain, ip := range self.staticHosts {
 		data[domain] = ip
 	}
 	for _, addr := range self.hosts {
 		data[addr.domain] = addr.ip
 	}
+	self.mu.RUnlock()
+
 	self.srv.ReplaceHosts(data)
 }
 
 func (self *Godns) SaveAddresses() {
 	data := make(map[string][]string)
+	self.mu.RLock()
 	for domain, ip := range self.staticAddr {
 		var v []string
 		if old, ok := data[domain]; ok {
@@ -262,11 +276,14 @@ func (self *Godns) SaveAddresses() {
 		v = append(v, serv.ip)
 		data[serv.domain] = v
 	}
+	self.mu.RUnlock()
+
 	self.srv.ReplaceAddresses(data)
 }
 
 func (self *Godns) SaveDomainServers() {
 	data := make(map[string][]string)
+	self.mu.RLock()
 	for _, serv := range self.domainServers {
 		var v []string
 		if old, ok := data[serv.domain]; ok {
@@ -276,6 +293,8 @@ func (self *Godns) SaveDomainServers() {
 		v = append(v, ip)
 		data[serv.domain] = v
 	}
+	self.mu.RUnlock()
+
 	self.srv.ReplaceDomainServers(data)
 }
 
@@ -332,5 +351,15 @@ func (self *Godns) AddDomainServer(domain string, servers []string) {
 			"err":   err,
 		}).Error("Cannot put godns server")
 		return
+	}
+}
+
+func removeAllElementsInChan(ch chan interface{}) {
+	for {
+		select {
+		case <-ch:
+		default:
+			return
+		}
 	}
 }
